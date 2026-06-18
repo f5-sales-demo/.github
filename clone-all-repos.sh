@@ -3,14 +3,26 @@
 # Clone (or refresh) all downstream repos from the f5xc-salesdemos organization.
 # Reads the repo list from the docs-control manifest and includes docs-control and .github.
 #
+# Running this once gives a developer a local clone of the whole ecosystem; re-running
+# pulls the freshest commits. Each existing repo is classified into exactly one outcome:
+#
+#   refreshed  clean and current/behind  -> fast-forward to its upstream
+#   healed     clean, parked on a branch merged & deleted upstream -> drop it, return to default
+#   attention  uncommitted changes and/or unpushed commits (or detached HEAD) -> left untouched
+#   error      fetch/clone failed, or an unexpected non-fast-forward
+#
+# The guiding rule: a repo with any local work is NEVER modified — it is only reported,
+# so unfinished work is impossible to lose.
+#
 
 set -euo pipefail
 
 MANIFEST_URL="https://raw.githubusercontent.com/f5xc-salesdemos/docs-control/refs/heads/main/.github/config/downstream-repos.json"
 ORG="f5xc-salesdemos"
 
-# Reason for the most recent refresh_repo/clone_repo failure (used in the summary).
-REFRESH_ERR=""
+# Outcome of the most recent refresh_repo/clone_repo call (read by the caller).
+REPO_STATUS=""   # cloned | refreshed | healed | attention | error
+REPO_DETAIL=""   # human-readable specifics for the summary
 
 # --- Dependency check ---
 check_deps() {
@@ -23,90 +35,129 @@ check_deps() {
     done
 }
 
+# Echo the repo's default branch (origin/HEAD), repairing the ref if missing.
+resolve_default() {
+    local dir="$1" d
+    d=$(git -C "$dir" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)
+    if [ -z "$d" ]; then
+        git -C "$dir" remote set-head origin --auto >/dev/null 2>&1 || true
+        d=$(git -C "$dir" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)
+    fi
+    echo "${d:-main}"
+}
+
+# Echo the count of commits on HEAD not yet pushed to a remote.
+# Uses the configured upstream when its ref still exists; otherwise counts commits
+# not contained in ANY remote branch (covers never-pushed and pruned-upstream branches).
+count_unpushed() {
+    local dir="$1" up
+    if up=$(git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) \
+       && git -C "$dir" show-ref --verify --quiet "refs/remotes/$up"; then
+        git -C "$dir" rev-list --count "$up..HEAD" 2>/dev/null || echo 0
+    else
+        git -C "$dir" rev-list --count HEAD --not --remotes 2>/dev/null || echo 0
+    fi
+}
+
 # Refresh an existing repo checkout at "$1".
-# Prints indented progress. On failure, sets REFRESH_ERR and returns 1.
-#
-# Handles the case where the local checkout is parked on a feature branch
-# that was merged and deleted upstream (the naive `git pull` failure mode):
-#   - default branch          -> fast-forward to origin
-#   - live feature branch      -> fast-forward in place, stay checked out
-#   - merged/deleted branch    -> switch back to default, delete stale branch
-# The switch only runs when the branch is clean with no unpushed commits;
-# otherwise the repo is left untouched and reported, so no local work is lost.
+# Prints indented progress and sets REPO_STATUS / REPO_DETAIL. Returns non-zero only
+# for the 'error' outcome (attention is a normal developer state, not a failure).
 refresh_repo() {
     local dir="$1"
-    REFRESH_ERR=""
+    REPO_STATUS=""
+    REPO_DETAIL=""
 
     # Refresh remote-tracking refs and prune branches deleted upstream.
     if ! git -C "$dir" fetch --prune origin 2>&1 | sed 's/^/  /'; then
         echo "  Warning: git fetch failed for $dir"
-        REFRESH_ERR="fetch failed"
+        REPO_STATUS="error"; REPO_DETAIL="fetch failed"
         return 1
     fi
 
-    # Resolve the repo's default branch (origin/HEAD), repairing it if missing.
-    local default
-    default=$(git -C "$dir" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-    if [ -z "$default" ]; then
-        git -C "$dir" remote set-head origin --auto >/dev/null 2>&1 || true
-        default=$(git -C "$dir" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-    fi
-    default=${default:-main}
-
     local current
-    current=$(git -C "$dir" rev-parse --abbrev-ref HEAD)
+    current=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+
+    # --- Universal sanity check: never touch a repo that has local work. ---
+    if [ "$current" = "HEAD" ]; then
+        echo "  Detached HEAD — left untouched."
+        REPO_STATUS="attention"; REPO_DETAIL="detached HEAD"
+        return 0
+    fi
+
+    local dirty_count unpushed_count
+    dirty_count=$(git -C "$dir" status --porcelain | wc -l | tr -d '[:space:]')
+    unpushed_count=$(count_unpushed "$dir")
+
+    if [ "$dirty_count" -gt 0 ] || [ "$unpushed_count" -gt 0 ]; then
+        local detail=""
+        if [ "$dirty_count" -gt 0 ]; then
+            if [ "$dirty_count" -eq 1 ]; then detail="1 uncommitted file"; else detail="$dirty_count uncommitted files"; fi
+        fi
+        if [ "$unpushed_count" -gt 0 ]; then
+            local u
+            if [ "$unpushed_count" -eq 1 ]; then u="1 unpushed commit"; else u="$unpushed_count unpushed commits"; fi
+            if [ -n "$detail" ]; then detail="$detail, $u"; else detail="$u"; fi
+        fi
+        echo "  Local work present on '$current' — left untouched ($detail)."
+        REPO_STATUS="attention"; REPO_DETAIL="$detail on '$current'"
+        return 0
+    fi
+
+    # --- Clean from here: safe to fast-forward or heal. ---
+    local default
+    default=$(resolve_default "$dir")
 
     if [ "$current" != "$default" ]; then
         if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$current"; then
-            # Feature branch still exists upstream: fast-forward it in place.
+            # Live feature branch: fast-forward in place and stay checked out.
             if git -C "$dir" merge --ff-only "origin/$current" 2>&1 | sed 's/^/  /'; then
-                echo "  On feature branch '$current' (still on remote) — left checked out."
+                echo "  On feature branch '$current' (still on remote) — fast-forwarded, left checked out."
+                REPO_STATUS="refreshed"; REPO_DETAIL="feature branch '$current'"
                 return 0
             fi
             echo "  Warning: fast-forward failed for $dir on '$current'"
-            REFRESH_ERR="ff failed on '$current'"
+            REPO_STATUS="error"; REPO_DETAIL="ff failed on '$current'"
             return 1
         fi
 
-        # Feature branch was merged/deleted upstream. Only switch back to the
-        # default branch when nothing local would be lost.
-        local dirty local_only
-        dirty=$(git -C "$dir" status --porcelain)
-        local_only=$(git -C "$dir" log --oneline "$current" --not --remotes 2>/dev/null)
-        if [ -n "$dirty" ] || [ -n "$local_only" ]; then
-            echo "  Skipping switch: '$current' has uncommitted changes or unpushed commits — left untouched."
-            REFRESH_ERR="on '$current' with local work"
-            return 1
-        fi
-
+        # Stale branch (merged & deleted upstream), nothing local to lose: drop it.
         echo "  Branch '$current' gone upstream — switching to '$default' and removing stale branch."
         if ! git -C "$dir" checkout "$default" 2>&1 | sed 's/^/  /'; then
             echo "  Warning: failed to checkout $default for $dir"
-            REFRESH_ERR="checkout failed"
+            REPO_STATUS="error"; REPO_DETAIL="checkout failed"
             return 1
         fi
         git -C "$dir" branch -D "$current" 2>&1 | sed 's/^/  /' || true
+        if git -C "$dir" merge --ff-only "origin/$default" 2>&1 | sed 's/^/  /'; then
+            REPO_STATUS="healed"; REPO_DETAIL="removed '$current'"
+            return 0
+        fi
+        echo "  Warning: fast-forward failed for $dir on '$default' (diverged from origin)"
+        REPO_STATUS="error"; REPO_DETAIL="ff failed on '$default'"
+        return 1
     fi
 
-    # Fast-forward the default branch to origin.
+    # On the default branch: fast-forward to origin.
     if git -C "$dir" merge --ff-only "origin/$default" 2>&1 | sed 's/^/  /'; then
+        REPO_STATUS="refreshed"; REPO_DETAIL="$default"
         return 0
     fi
     echo "  Warning: fast-forward failed for $dir on '$default' (diverged from origin)"
-    REFRESH_ERR="ff failed"
+    REPO_STATUS="error"; REPO_DETAIL="ff failed on '$default'"
     return 1
 }
 
 # Clone "$1" (org/name) into the current directory.
-# On failure, sets REFRESH_ERR and returns 1.
 clone_repo() {
     local full_name="$1"
-    REFRESH_ERR=""
+    REPO_STATUS=""
+    REPO_DETAIL=""
     if git clone "https://github.com/${full_name}.git" 2>&1 | sed 's/^/  /'; then
+        REPO_STATUS="cloned"
         return 0
     fi
     echo "  Warning: git clone failed for $full_name"
-    REFRESH_ERR="clone failed"
+    REPO_STATUS="error"; REPO_DETAIL="clone failed"
     return 1
 }
 
@@ -133,7 +184,7 @@ main() {
 
     # --- Clone or refresh each repo ---
     local cloned=0 refreshed=0
-    local errors=()
+    local healed=() attention=() errors=()
     local full_name dir
 
     for full_name in "${repos[@]}"; do
@@ -142,35 +193,51 @@ main() {
 
         if [ -d "$dir" ]; then
             echo "  Directory exists, refreshing..."
-            if refresh_repo "$dir"; then
-                (( refreshed++ )) || true
-            else
-                errors+=("$full_name ($REFRESH_ERR)")
-            fi
+            refresh_repo "$dir" || true
         else
             echo "  Cloning..."
-            if clone_repo "$full_name"; then
-                (( cloned++ )) || true
-            else
-                errors+=("$full_name ($REFRESH_ERR)")
-            fi
+            clone_repo "$full_name" || true
         fi
+
+        case "$REPO_STATUS" in
+            cloned)    (( cloned++ )) || true ;;
+            refreshed) (( refreshed++ )) || true ;;
+            healed)    healed+=("$full_name: $REPO_DETAIL") ;;
+            attention) attention+=("$full_name: $REPO_DETAIL") ;;
+            *)         errors+=("$full_name: $REPO_DETAIL") ;;
+        esac
         echo
     done
 
     # --- Summary ---
+    # Optional sections print only when non-empty; the for loops are reached only
+    # when the array has elements, keeping them safe under `set -u` on bash 3.2.
     echo "===== Summary ====="
     echo "Cloned:    $cloned"
     echo "Refreshed: $refreshed"
-    if [ ${#errors[@]} -gt 0 ]; then
-        echo "Errors:    ${#errors[@]}"
-        local e
-        for e in "${errors[@]}"; do
-            echo "  - $e"
-        done
-    else
-        echo "Errors:    0"
+
+    if [ "${#healed[@]}" -gt 0 ]; then
+        echo "Healed:    ${#healed[@]}   (stale branch removed, switched to default)"
+        local h
+        for h in "${healed[@]}"; do echo "  - $h"; done
     fi
+
+    if [ "${#attention[@]}" -gt 0 ]; then
+        echo
+        echo "⚠️  Needs your attention (${#attention[@]})"
+        local a
+        for a in "${attention[@]}"; do echo "  - $a"; done
+    fi
+
+    if [ "${#errors[@]}" -gt 0 ]; then
+        echo
+        echo "❌ Errors (${#errors[@]})"
+        local e
+        for e in "${errors[@]}"; do echo "  - $e"; done
+    fi
+
+    # Exit non-zero only on genuine errors; unfinished work does not fail the run.
+    [ "${#errors[@]}" -eq 0 ]
 }
 
 # Only run when executed directly, so the functions can be sourced for testing.
