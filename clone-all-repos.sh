@@ -176,6 +176,10 @@ main() {
     local repos=("$ORG/docs-control" "$ORG/.github")
     local repo
     while IFS= read -r repo; do
+        # Manifest entries are short names; prepend org if no slash present.
+        if [[ "$repo" != */* ]]; then
+            repo="$ORG/$repo"
+        fi
         repos+=("$repo")
     done < <(echo "$json" | jq -r '.[]')
 
