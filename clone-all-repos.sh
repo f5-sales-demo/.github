@@ -147,6 +147,65 @@ refresh_repo() {
     return 1
 }
 
+# Ensure "$1"'s origin points at the canonical "$2" ("<owner>/<name>").
+#
+# An org rename leaves existing clones on the old owner indefinitely: GitHub
+# redirects both fetch and push, so nothing ever fails loudly and refresh_repo
+# would keep using the stale URL forever. Heal it here, before the fetch, so
+# the fetch itself goes to the canonical location.
+#
+# Only an owner change on a matching repo name is healed, and the existing
+# transport is preserved -- an SSH remote stays SSH. A remote whose repo name
+# differs is a deliberate choice by whoever set it: report it, never guess.
+#
+# Sets ORIGIN_STATUS to one of: ok | healed | mismatch | missing
+reconcile_origin() {
+    local dir="$1" full_name="$2"
+    local want_owner="${full_name%/*}" want_name="${full_name##*/}"
+    ORIGIN_STATUS="ok"
+    ORIGIN_DETAIL=""
+
+    local url
+    if ! url=$(git -C "$dir" remote get-url origin 2>/dev/null) || [ -z "$url" ]; then
+        echo "  Warning: no 'origin' remote -- left untouched."
+        ORIGIN_STATUS="missing"; ORIGIN_DETAIL="no 'origin' remote"
+        return 1
+    fi
+
+    # Split "<prefix><owner>/<name>[.git]" without assuming a transport.
+    local path="${url%.git}"
+    local name="${path##*/}"
+    local rest="${path%/*}"
+    local owner="${rest##*[:/]}"
+
+    if [ "$owner" = "$want_owner" ] && [ "$name" = "$want_name" ]; then
+        return 0
+    fi
+
+    if [ "$name" != "$want_name" ]; then
+        echo "  Warning: origin is '$owner/$name', expected '$full_name' -- left untouched."
+        ORIGIN_STATUS="mismatch"; ORIGIN_DETAIL="origin is '$owner/$name'"
+        return 1
+    fi
+
+    # Same repo, different owner: an org rename. Rebuild only the owner segment
+    # so the transport (ssh / https / filesystem path) survives untouched.
+    local suffix="$owner/$name"
+    local prefix="${path%"$suffix"}"
+    local new_url="${prefix}${want_owner}/${want_name}"
+    case "$url" in *.git) new_url="${new_url}.git" ;; esac
+
+    if ! git -C "$dir" remote set-url origin "$new_url"; then
+        echo "  Warning: failed to update origin for $dir"
+        ORIGIN_STATUS="mismatch"; ORIGIN_DETAIL="could not set origin"
+        return 1
+    fi
+
+    echo "  Origin owner corrected: '$owner' -> '$want_owner'"
+    ORIGIN_STATUS="healed"; ORIGIN_DETAIL="origin owner '$owner' -> '$want_owner'"
+    return 0
+}
+
 # Clone "$1" (org/name) into the current directory.
 clone_repo() {
     local full_name="$1"
@@ -197,7 +256,16 @@ main() {
 
         if [ -d "$dir" ]; then
             echo "  Directory exists, refreshing..."
-            refresh_repo "$dir" || true
+            if reconcile_origin "$dir" "$full_name"; then
+                if [ "$ORIGIN_STATUS" = "healed" ]; then
+                    healed+=("$full_name: $ORIGIN_DETAIL")
+                fi
+                refresh_repo "$dir" || true
+            else
+                # Origin is absent or points at a different repo entirely;
+                # refreshing would fetch from the wrong place.
+                REPO_STATUS="attention"; REPO_DETAIL="$ORIGIN_DETAIL"
+            fi
         else
             echo "  Cloning..."
             clone_repo "$full_name" || true

@@ -157,6 +157,80 @@ chk "left on feature/w"         test "$(head_branch "$T/work")" = feature/w
 chk "NOT fast-forwarded away"   not at_ref "$T/work" origin/feature/w
 rm -rf "$T"
 
+# --- origin reconciliation (issue #4) -------------------------------------
+# Fixtures mimic "<owner>/<name>" with local bare repos, so a heal can be proven
+# by fetching from the corrected URL rather than by string comparison alone.
+origin_is()     { [ "$(git -C "$1" remote get-url origin)" = "$2" ]; }
+ostatus_is()    { [ "${ORIGIN_STATUS:-}" = "$1" ]; }
+odetail_has()   { case "${ORIGIN_DETAIL:-}" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+
+# two_owner_fixture <root> <name>: bare repos under both owners, clone from the old.
+two_owner_fixture() {
+  local root="$1" name="$2"
+  mkdir -p "$root/f5xc-salesdemos" "$root/f5-sales-demo"
+  gitc init -q --bare "$root/f5xc-salesdemos/$name.git"
+  gitc clone -q "$root/f5xc-salesdemos/$name.git" "$root/seed" 2>/dev/null
+  ( cd "$root/seed" || exit 1
+    echo v1 > file.txt && gitc add file.txt && gitc commit -q -m c1
+    gitc push -q -u origin main )
+  # canonical owner gets the same history plus one extra commit
+  gitc clone -q --bare "$root/f5xc-salesdemos/$name.git" "$root/f5-sales-demo/$name.git" 2>/dev/null
+  ( cd "$root/seed" || exit 1
+    echo v2 >> file.txt && gitc commit -qam c2
+    gitc push -q "$root/f5-sales-demo/$name.git" main )
+  gitc clone -q "$root/f5xc-salesdemos/$name.git" "$root/work" 2>/dev/null
+}
+
+echo "== Scenario H: stale owner -> healed, and the corrected URL is fetchable =="
+T=$(mktemp -d); two_owner_fixture "$T" waf
+reconcile_origin "$T/work" "f5-sales-demo/waf" >/tmp/_ro.out 2>&1
+chk "status=healed"              ostatus_is healed
+chk "origin repointed"           origin_is "$T/work" "$T/f5-sales-demo/waf.git"
+chk "fetch reaches new owner"    git -C "$T/work" fetch -q origin
+chk "sees canonical extra commit" test "$(git -C "$T/work" rev-list --count HEAD..origin/main)" = 1
+rm -rf "$T"
+
+echo "== Scenario I: already canonical -> no-op =="
+T=$(mktemp -d); two_owner_fixture "$T" waf
+git -C "$T/work" remote set-url origin "$T/f5-sales-demo/waf.git"
+reconcile_origin "$T/work" "f5-sales-demo/waf" >/tmp/_ro.out 2>&1
+chk "status=ok"                  ostatus_is ok
+chk "origin unchanged"           origin_is "$T/work" "$T/f5-sales-demo/waf.git"
+rm -rf "$T"
+
+echo "== Scenario J: SSH transport preserved when healing =="
+T=$(mktemp -d); two_owner_fixture "$T" waf
+git -C "$T/work" remote set-url origin "git@github.com:f5xc-salesdemos/waf.git"
+reconcile_origin "$T/work" "f5-sales-demo/waf" >/tmp/_ro.out 2>&1
+chk "status=healed"              ostatus_is healed
+chk "stays SSH, owner fixed"     origin_is "$T/work" "git@github.com:f5-sales-demo/waf.git"
+rm -rf "$T"
+
+echo "== Scenario J2: HTTPS github remote healed in place =="
+T=$(mktemp -d); two_owner_fixture "$T" waf
+git -C "$T/work" remote set-url origin "https://github.com/f5xc-salesdemos/waf.git"
+reconcile_origin "$T/work" "f5-sales-demo/waf" >/tmp/_ro.out 2>&1
+chk "status=healed"              ostatus_is healed
+chk "https owner fixed"          origin_is "$T/work" "https://github.com/f5-sales-demo/waf.git"
+rm -rf "$T"
+
+echo "== Scenario K: different repo NAME -> untouched, reported =="
+T=$(mktemp -d); two_owner_fixture "$T" waf
+git -C "$T/work" remote set-url origin "https://github.com/someone/totally-different.git"
+reconcile_origin "$T/work" "f5-sales-demo/waf" >/tmp/_ro.out 2>&1
+chk "status=mismatch"            ostatus_is mismatch
+chk "origin left alone"          origin_is "$T/work" "https://github.com/someone/totally-different.git"
+chk "detail names actual remote" odetail_has "someone/totally-different"
+rm -rf "$T"
+
+echo "== Scenario L: no origin remote -> reported, not fatal =="
+T=$(mktemp -d); two_owner_fixture "$T" waf
+git -C "$T/work" remote remove origin
+reconcile_origin "$T/work" "f5-sales-demo/waf" >/tmp/_ro.out 2>&1; RO_RC=$?
+chk "status=missing"             ostatus_is missing
+chk "returns nonzero"            test "$RO_RC" != 0
+rm -rf "$T"
+
 echo
 echo "===== $PASS passed, $FAIL failed ====="
 [ "$FAIL" -eq 0 ]
