@@ -234,6 +234,110 @@ chk "status=missing"             ostatus_is missing
 chk "returns nonzero"            test "$RO_RC" != 0
 rm -rf "$T"
 
+# --- class filtering ------------------------------------------------------
+# No network and no git here: parse_args works on argv alone, and select_repos is
+# handed both manifests as literals. The fixture deliberately differs from the real
+# fleet so a passing test can never be an accident of the live manifest.
+
+FIX_MANIFEST='["alpha","beta","gamma","delta","other-org/epsilon"]'
+FIX_GOV='{
+  "repo_classes": {
+    "_default": "developer",
+    "classes": {
+      "content":     {"authority": "author"},
+      "developer":   {"authority": "delegate"},
+      "scaffolding": {"authority": "governed"}
+    },
+    "repos": {"alpha": "content", "beta": "developer", "gamma": "scaffolding"}
+  }
+}'
+
+# selected_is <expected>: compare the space-padded SELECTED_CLASSES against a plain list.
+selected_is() { [ "$(classes_label)" = "$1" ]; }
+# rc_of <args...>: exit code of a subshell invocation, so exiting paths stay testable.
+rc_of() { ( "$@" >/dev/null 2>&1 ); }
+# repos_for <classes...>: newline list of repo names select_repos yields for a filter.
+repos_for() {
+  SELECTED_CLASSES=""
+  local c
+  for c in "$@"; do add_class "$c"; done
+  select_repos "$FIX_MANIFEST" "$FIX_GOV" | cut -f1
+}
+# pairs_for <class>: "name<TAB>class" lines for a filter.
+pairs_for() { SELECTED_CLASSES=""; add_class "$1"; select_repos "$FIX_MANIFEST" "$FIX_GOV"; }
+lines_eq() { [ "$1" = "$2" ]; }
+
+echo "== Scenario M: parse_args maps flags and aliases to classes =="
+parse_args --content                 && chk "--content"                selected_is "content"
+parse_args --developer               && chk "--developer"              selected_is "developer"
+parse_args --code                    && chk "--code aliases developer" selected_is "developer"
+parse_args --scaffolding             && chk "--scaffolding"            selected_is "scaffolding"
+parse_args --infrastructure          && chk "--infrastructure aliases scaffolding" \
+                                                                       selected_is "scaffolding"
+parse_args                           && chk "no flag -> unfiltered"    selected_is "all"
+parse_args --content --developer     && chk "flags union"              selected_is "content, developer"
+parse_args --content --content       && chk "repeats deduped"          selected_is "content"
+parse_args --code --developer        && chk "alias+canonical deduped"  selected_is "developer"
+parse_args --class content,scaffolding && chk "--class comma list"     selected_is "content, scaffolding"
+parse_args --class=content           && chk "--class=value form"       selected_is "content"
+parse_args --content --class developer && chk "--class unions with flags" \
+                                                                       selected_is "content, developer"
+parse_args --dry-run                 && chk "--dry-run sets the flag"  test "$DRY_RUN" = 1
+parse_args --content                 && chk "--dry-run defaults off"   test "$DRY_RUN" = 0
+
+echo "== Scenario N: parse_args rejects bad invocations =="
+chk "unknown option exits 2"      test "$(rc_of parse_args --nope; echo $?)"        = 2
+chk "--class without value exits 2" test "$(rc_of parse_args --class; echo $?)"     = 2
+chk "empty --class= exits 2"      test "$(rc_of parse_args --class=; echo $?)"      = 2
+chk "unsafe class name exits 2"   test "$(rc_of parse_args --class 'a b'; echo $?)" = 2
+chk "--help exits 0"              test "$(rc_of parse_args --help; echo $?)"        = 0
+chk "usage documents the aliases" grep -q -- "--infrastructure" <<<"$(usage)"
+chk "usage documents the bootstrap rule" grep -q "bootstrap" <<<"$(usage)"
+
+echo "== Scenario O: select_repos joins the manifest to repo_classes =="
+chk "unfiltered returns every entry" \
+  lines_eq "$(repos_for)" "$(printf 'f5-sales-demo/alpha\nf5-sales-demo/beta\nf5-sales-demo/gamma\nf5-sales-demo/delta\nother-org/epsilon')"
+chk "--content returns only content" \
+  lines_eq "$(repos_for content)" "f5-sales-demo/alpha"
+chk "--scaffolding returns only scaffolding" \
+  lines_eq "$(repos_for scaffolding)" "f5-sales-demo/gamma"
+chk "unions are ordered by the manifest" \
+  lines_eq "$(repos_for content scaffolding)" "$(printf 'f5-sales-demo/alpha\nf5-sales-demo/gamma')"
+# 'delta' and 'epsilon' have no assignment, so they must inherit _default (developer)
+# rather than leaking into an authoring clone.
+chk "unassigned repos inherit _default" \
+  lines_eq "$(repos_for developer)" "$(printf 'f5-sales-demo/beta\nf5-sales-demo/delta\nother-org/epsilon')"
+chk "unassigned repo is NOT content" \
+  not grep -qxF "f5-sales-demo/delta" <<<"$(repos_for content)"
+chk "owner/repo entries keep their owner" \
+  grep -qxF "other-org/epsilon" <<<"$(repos_for)"
+chk "class is emitted alongside the name" \
+  lines_eq "$(pairs_for content)" "$(printf 'f5-sales-demo/alpha\tcontent')"
+
+# An unfiltered run must still work when the classification is unreachable...
+chk "missing repo_classes still yields every repo" \
+  lines_eq "$(SELECTED_CLASSES=''; select_repos "$FIX_MANIFEST" '{}' | wc -l | tr -d ' ')" "5"
+# ...and main() hands select_repos an explicit 'unclassified' default in that case, so the
+# output never asserts a class nobody read.
+chk "an explicit _default is honoured over the built-in one" \
+  lines_eq "$(SELECTED_CLASSES=''; select_repos "$FIX_MANIFEST" \
+    '{"repo_classes":{"_default":"unclassified","classes":{}}}' | cut -f2 | sort -u)" "unclassified"
+chk "the unavailable-classification fallback is the one main uses" \
+  grep -q '"_default":"unclassified"' "$SCRIPT"
+
+echo "== Scenario P: validate_classes catches typos =="
+# The rejections print their diagnostic to stderr by design; silence it here so an
+# expected failure does not read like a broken test run.
+SELECTED_CLASSES=""; add_class content
+chk "a defined class validates"    validate_classes "$FIX_GOV"
+SELECTED_CLASSES=""; add_class contnet
+chk "a typo is rejected"           not validate_classes "$FIX_GOV" 2>/dev/null
+SELECTED_CLASSES=""; add_class content; add_class nope
+chk "one bad name fails the set"   not validate_classes "$FIX_GOV" 2>/dev/null
+# shellcheck disable=SC2034  # read by validate_classes in the sourced script
+SELECTED_CLASSES=""; add_class content
+chk "no classes block is rejected" not validate_classes '{}' 2>/dev/null
+
 echo
 echo "===== $PASS passed, $FAIL failed ====="
 [ "$FAIL" -eq 0 ]
