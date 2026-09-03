@@ -1,0 +1,65 @@
+---
+title: F5 Sales Demo Organization Architecture
+description: Ecosystem taxonomy, repository classification, onboarding workflows, and multi-repo developer orchestration.
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+The **F5 Sales Demo** () GitHub organization hosts an ecosystem of 40 modular repositories. Together, these repositories provide live demonstration environments, attack simulation engines, infrastructure-as-code automation, developer CLIs, and static documentation sites for F5 Distributed Cloud (XC) platform capabilities.
+
+## Repository Taxonomy
+
+The ecosystem repositories are categorized into five distinct operational tiers:
+
+```text
++---------------------------------------------------------------------------------+
+|                       Tier 1: Governance & Root Portal                          |
+|         docs-control (governance engine)  |  docs (federation portal)           |
++---------------------------------------------------------------------------------+
+                                       |
+                                       v
++---------------------------------------------------------------------------------+
+|                    Tier 2: Documentation Engine & Theme                         |
+|   docs-builder  |  docs-theme  |  docs-icons  |  starlight-llms-txt  |  mega-menu|
++---------------------------------------------------------------------------------+
+                                       |
+          +----------------------------+----------------------------+
+          |                                                         |
+          v                                                         v
++---------------------------------------+  +--------------------------------------+
+|    Tier 3: Core Developer Tooling     |  |     Tier 4: Platform & Packaging     |
+| xcsh  |  vscode-xcsh  |  xcsh-action  |  | devcontainer  |  apt-repo  |  i18n-core|
+| terraform-provider-xcsh  |  console   |  | marketplace  |  api-specs  |  admin  |
++---------------------------------------+  +--------------------------------------+
+                                       |
+                                       v
++---------------------------------------------------------------------------------+
+|                Tier 5: Security, Traffic & Demo Infrastructure                  |
+| mcn  |  csd  |  origin-server  |  traffic-generator  |  cdn-simulator  |  ddos  |
+| dns  |  webapp-api-protection  |  waf  |  was  |  bot-standard  |  bot-advanced |
++---------------------------------------------------------------------------------+
+```
+
+## Multi-Repository Orchestration
+
+To clone and synchronize all repositories across the organization locally, run the included  utility:
+
+```bash
+# Clone the complete ecosystem into the current workspace
+bash clone-all-repos.sh
+```
+
+### Environment Synchronization Options
+
+| Flag / Option | Description | Target Environment |
+| :--- | :--- | :--- |
+| `--protocol ssh` | Use SSH (`git@github.com:...`) for authenticated operations. | Standard development machines. |
+| `--protocol https` | Use HTTPS (`https://github.com/...`) for read-only CI or token access. | Containerized pipelines. |
+| `--shallow` | Perform shallow clones (`--depth 1`) to minimize disk usage and transfer time. | Ephemeral runner test harnesses. |
+
+## Documentation Standards
+
+All repositories in the ecosystem adhere to the following unified standards:
+- **English-Only Authoring**: All documentation is authored exclusively in English under `docs/en/`.
+- **Pre-Release Clean-Break**: Direct representation of current API contracts without migration baggage or backward-compatibility shims.
+- **Strict RFC Identifiers**: Documentation placeholders strictly use RFC 5737 IPv4 addresses (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) and RFC 2606 domain names (`example.com`, `example.net`, `example.org`).
