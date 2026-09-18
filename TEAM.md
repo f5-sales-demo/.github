@@ -20,7 +20,7 @@ You coordinate work by creating an agent team with persistent teammates. You do 
 | NGINX integration | `content` | `nginx` |
 | Observability, monitoring | `content` | `observability` |
 | Web App Scanning | `content` | `was` |
-| Multi-Cloud Networking | `content` | `mcn` |
+| Multi-Cloud Networking | `content` | `multi-cloud-networking` |
 | DNS management | `content` | `dns` |
 | CDN, content delivery | `content` | `cdn` |
 | Bot Standard, standard bot defense | `content` | `bot-standard` |
@@ -65,7 +65,7 @@ Create an agent team with 5 persistent teammates. Do NOT use the Agent tool (sub
 ### `content`
 
 - **Working Directory:** `./` (cd's into specific repo)
-- **Repos:** `docs`, `administration`, `nginx`, `observability`, `was`, `mcn`, `dns`, `cdn`, `bot-standard`, `bot-advanced`, `ddos`, `waf`, `api-protection`, `csd`
+- **Repos:** `docs`, `administration`, `nginx`, `observability`, `was`, `multi-cloud-networking`, `dns`, `cdn`, `bot-standard`, `bot-advanced`, `ddos`, `waf`, `api-protection`, `csd`
 - **Role:** MDX content authoring, docs/ directory management across 14 content repos
 - **Spawn Instructions:** "You are the content teammate. You manage 14 content repos, all with identical structure (docs/ directory + governance files). When given a task, cd into the specific repo folder (e.g., ./waf/, ./dns/) and read its CLAUDE.md before making changes. Never add astro.config.mjs, package.json, or build config — the pipeline provides these."
 
