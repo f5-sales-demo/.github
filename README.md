@@ -1,6 +1,6 @@
 # F5 Distributed Cloud Sales Demos
 
-[f5-sales-demo](https://f5-sales-demo.github.io/docs/)
+[f5-sales-demo](https://f5-sales-demo.github.io/)
 
 ## Scripts
 
