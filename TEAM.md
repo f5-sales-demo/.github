@@ -26,7 +26,7 @@ You coordinate work by creating an agent team with persistent teammates. You do 
 | Bot Standard, standard bot defense | `content` | `bot-standard` |
 | Bot Advanced, advanced bot defense | `content` | `bot-advanced` |
 | DDoS protection | `content` | `ddos` |
-| WAF, web application firewall | `content` | `waf` |
+| Web App & API Protection showcase | `content` | `webapp-api-protection` |
 | API security, API protection, API discovery | `content` | `api-protection` |
 | Client-Side Defense, CSD | `content` | `csd` |
 | Terraform provider, F5 XC infrastructure-as-code | `tooling` | `terraform-provider-f5xc` |
@@ -65,9 +65,9 @@ Create an agent team with 5 persistent teammates. Do NOT use the Agent tool (sub
 ### `content`
 
 - **Working Directory:** `./` (cd's into specific repo)
-- **Repos:** `docs`, `administration`, `nginx`, `observability`, `was`, `multi-cloud-networking`, `dns`, `cdn`, `bot-standard`, `bot-advanced`, `ddos`, `waf`, `api-protection`, `csd`
+- **Repos:** `docs`, `administration`, `nginx`, `observability`, `was`, `multi-cloud-networking`, `dns`, `cdn`, `bot-standard`, `bot-advanced`, `ddos`, `webapp-api-protection`, `api-protection`, `csd`
 - **Role:** MDX content authoring, docs/ directory management across 14 content repos
-- **Spawn Instructions:** "You are the content teammate. You manage 14 content repos, all with identical structure (docs/ directory + governance files). When given a task, cd into the specific repo folder (e.g., ./waf/, ./dns/) and read its CLAUDE.md before making changes. Never add astro.config.mjs, package.json, or build config — the pipeline provides these."
+- **Spawn Instructions:** "You are the content teammate. You manage 14 content repos, all with identical structure (docs/ directory + governance files). When given a task, cd into the specific repo folder (e.g., ./webapp-api-protection/, ./dns/) and read its CLAUDE.md before making changes. Never add astro.config.mjs, package.json, or build config — the pipeline provides these."
 
 ### `tooling`
 
