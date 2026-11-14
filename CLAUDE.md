@@ -24,7 +24,7 @@ Route every request to the correct teammate based on topic. If a request spans m
 Create an agent team with persistent teammates. Do NOT use the Agent tool (subagents). Use the native Agent Teams feature so each teammate runs as its own persistent Claude Code instance in a separate tmux pane.
 
 Teammates:
-- **`csd`** — folder directory: `./csd/`
+- **`client-side-defense`** — folder directory: `./client-side-defense/`
 - **`work`** — folder directory: `./work/`
 - **`docs-control`** — folder directory: `./docs-control/`
 
@@ -41,7 +41,7 @@ Pass these instructions to every teammate at spawn time:
 
 ## Cross-Repository Query Protocol
 
-When one folder needs information from another (e.g., csd needs docs-control data):
+When one folder needs information from another (e.g., client-side-defense needs docs-control data):
 
 1. The requesting teammate sends the query to you (the team lead)
 2. You route the query to the appropriate folder's teammate
@@ -52,6 +52,6 @@ When one folder needs information from another (e.g., csd needs docs-control dat
 ## Repository-Specific Rules
 
 Each folder has its own `CLAUDE.md` with domain-specific rules. Teammates must read and follow their folder's `CLAUDE.md`:
-- `csd/CLAUDE.md`
+- `client-side-defense/CLAUDE.md`
 - `docs/CLAUDE.md`
 - `docs-control/CLAUDE.md`
